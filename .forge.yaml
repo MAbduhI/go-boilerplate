@@ -1,0 +1,20 @@
+# Configuration for the `gen` code generator.
+#
+# module_prefix is the import path root of this repository. Change it when you
+# fork this boilerplate and every generated file follows, because the templates
+# read it from here instead of hardcoding an import path.
+module_prefix: github.com/MAbduhI/go-boilerplate
+
+shared:
+  # The base struct that generated models embed. Point `type` at BaseModelUUID
+  # to make UUID keys the repo-wide default; override per entity with
+  # `gen make:module <entity> --base BaseModelUUID`.
+  base_model:
+    import_path: github.com/MAbduhI/go-boilerplate/shared/database/model
+    type: BaseModel
+
+# Directory layout. Override only if you move things around.
+paths:
+  modules: modules
+  shared: shared
+  router: app/internal/router/router.go

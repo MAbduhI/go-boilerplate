@@ -1,0 +1,38 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+gen
+
+# Test and coverage output
+*.test
+*.out
+coverage.*
+profile.cov
+
+# Local configuration — .env.example is the template that IS committed
+.env
+.env.*
+!.env.example
+
+# Go workspace
+# go.work IS committed: it defines the module layout and every build depends on
+# it. go.work.sum is a local checksum cache and is not.
+go.work.sum
+
+# Generated protobuf output. The .proto is the source of truth; run
+# `make proto` to regenerate. Commit these instead if your CI has no protoc.
+*.pb.go
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Tooling caches
+.golangci-cache/

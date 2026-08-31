@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package example.v1;
+
+// go_package must match the Go import path of this directory, or the generated
+// pb.go will declare a package the module cannot import.
+option go_package = "github.com/MAbduhI/go-boilerplate/modules/example/grpc;grpcsvc";
+
+import "google/protobuf/timestamp.proto";
+
+// ExampleService is the gRPC surface for examples, mirroring the
+// REST handler so both transports drive the same usecase.
+service ExampleService {
+  rpc ListExamples(ListExamplesRequest) returns (ListExamplesResponse);
+  rpc GetExample(GetExampleRequest) returns (GetExampleResponse);
+  rpc CreateExample(CreateExampleRequest) returns (CreateExampleResponse);
+  rpc UpdateExample(UpdateExampleRequest) returns (UpdateExampleResponse);
+  rpc DeleteExample(DeleteExampleRequest) returns (DeleteExampleResponse);
+}
+
+// Example is the wire representation of the example model.
+message Example {
+  uint64 id = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message ListExamplesRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string search = 3;
+}
+
+message ListExamplesResponse {
+  repeated Example items = 1;
+  int64 total_items = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message GetExampleRequest {
+  uint64 id = 1;
+}
+
+message GetExampleResponse {
+  Example example = 1;
+}
+
+message CreateExampleRequest {
+  string name = 1;
+  string description = 2;
+}
+
+message CreateExampleResponse {
+  Example example = 1;
+}
+
+message UpdateExampleRequest {
+  uint64 id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message UpdateExampleResponse {
+  Example example = 1;
+}
+
+message DeleteExampleRequest {
+  uint64 id = 1;
+}
+
+message DeleteExampleResponse {}

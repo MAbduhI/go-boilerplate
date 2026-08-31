@@ -1,0 +1,155 @@
+# golangci-lint configuration (schema v2).
+#
+# Run it with `make lint`, which applies this config to every module in go.work.
+# The selection favours linters that catch real defects — unchecked errors,
+# leaked resources, misused contexts — over stylistic ones, so that a clean run
+# means something.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  # Build tags used anywhere in the repo must be listed or those files are
+  # skipped silently.
+  build-tags:
+    - integration
+
+linters:
+  # "standard" is errcheck, govet, ineffassign, staticcheck and unused.
+  default: standard
+  enable:
+    - bodyclose        # HTTP response bodies must be closed
+    - contextcheck     # do not drop an inherited context
+    - copyloopvar      # stale loop-variable captures
+    - durationcheck    # multiplying two durations is nearly always a bug
+    - errorlint        # use errors.Is/As instead of == and type assertions
+    - goconst          # repeated string literals
+    - gocritic         # broad correctness and performance checks
+    - gosec            # security issues
+    - misspell
+    - nilerr           # returning nil when err is non-nil
+    - noctx            # HTTP/SQL calls that ignore context
+    - prealloc         # slices that could be preallocated
+    - revive           # replacement for golint
+    - rowserrcheck     # sql.Rows.Err must be checked
+    - sqlclosecheck    # sql.Rows/Stmt must be closed
+    - unconvert        # redundant conversions
+    - unparam          # unused function parameters
+    - usestdlibvars    # use http.MethodGet rather than "GET"
+    - wastedassign
+    - whitespace
+
+  settings:
+    errcheck:
+      # Close on a deferred cleanup path is conventionally ignored; requiring a
+      # check there produces noise without finding bugs.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*database/sql.DB).Close
+
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment reorders struct fields for packing, which hurts
+        # readability more than it saves memory here.
+        - fieldalignment
+        # `if err := f(); err != nil` shadows an outer err by design and is the
+        # standard Go idiom; flagging it fights the language.
+        - shadow
+
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: var-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        # Both fight the early-return style used throughout the repo.
+        - ifElseChain
+        - singleCaseSwitch
+        # Config structs are intentionally passed by value: they are copied once
+        # at startup, and a value receiver keeps them immutable at the call site.
+        # The copy cost is irrelevant next to opening a database connection.
+        - hugeParam
+        # Two-result helpers like (status, code) read better positionally than
+        # with invented names.
+        - unnamedResult
+
+    gosec:
+      excludes:
+        # G104 duplicates errcheck.
+        - G104
+
+    goconst:
+      min-len: 3
+      min-occurrences: 4
+
+    staticcheck:
+      checks:
+        - all
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Tests may be looser: table-driven tests repeat literals, and a test that
+      # deliberately exercises a bad input needs to construct one.
+      - path: _test\.go
+        linters:
+          - goconst
+          - gosec
+          - unparam
+          - contextcheck
+
+      # Generated protobuf code is not ours to lint.
+      - path: \.pb\.go$
+        linters:
+          - revive
+          - gocritic
+          - unparam
+          - staticcheck
+
+      # The generator's templates intentionally contain TODOs and long strings.
+      - path: cmd/gen/
+        linters:
+          - goconst
+
+      # A code generator reads and writes operator-supplied paths and shells out
+      # to the go toolchain and protoc: that is its entire function, so G204 and
+      # G304 have nothing to report here. It also writes *source files*, which
+      # must be world-readable (0644/0755) — gosec's 0600/0750 expectation is
+      # for secrets, and applying it would produce unreadable generated code.
+      - path: cmd/gen/
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      # Group this repo's own imports last, which is the convention used
+      # throughout the source.
+      local-prefixes:
+        - github.com/MAbduhI/go-boilerplate
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  # Report every finding, including on unchanged lines.
+  new: false

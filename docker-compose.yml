@@ -1,0 +1,198 @@
+# Local development services.
+#
+# `docker compose up -d` starts only the core three — Postgres, Redis and Mailpit
+# — because those are what the app needs to boot and what most work touches.
+# The heavier services sit behind profiles so a laptop is not asked to run
+# Cassandra, Elasticsearch, Kafka and Temporal to change a REST handler:
+#
+#   docker compose --profile nosql  up -d    # mongo, cassandra, dynamodb
+#   docker compose --profile search up -d    # elasticsearch
+#   docker compose --profile queue  up -d    # kafka, temporal
+#   docker compose --profile all    up -d    # everything
+#
+# Credentials match .env.example. They are development values; nothing here is
+# meant to be exposed beyond localhost.
+
+name: go-boilerplate
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app_secret
+      POSTGRES_DB: app
+      # Deterministic collation, so ordering matches between machines.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # An eviction policy matters even in dev: without one a full cache starts
+    # refusing writes instead of evicting, which looks like a bug in your code.
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP — MAILPIT_PORT
+      - "8025:8025"   # web UI — open http://localhost:8025 to read sent mail
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+  # ─── NoSQL profile ─────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    profiles: [nosql, all]
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  cassandra:
+    image: cassandra:5
+    profiles: [nosql, all]
+    restart: unless-stopped
+    ports:
+      - "9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: go-boilerplate
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      # Cassandra defaults to a heap sized for a server; cap it for a laptop.
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      # Cassandra is slow to come up; allow a generous start period.
+      retries: 20
+      start_period: 60s
+
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    profiles: [nosql, all]
+    restart: unless-stopped
+    # -sharedDb makes every credential see one database, which is what you want
+    # locally; without it each access key gets its own isolated set of tables.
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data"]
+    working_dir: /home/dynamodblocal
+    user: root
+    ports:
+      - "8000:8000"
+    volumes:
+      - dynamodb-data:/data
+
+  # ─── Search profile ────────────────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    profiles: [search, all]
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # ─── Queue profile ─────────────────────────────────────────────────────────
+  kafka:
+    image: bitnami/kafka:3.8
+    profiles: [queue, all]
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode: no ZooKeeper.
+      KAFKA_CFG_NODE_ID: 0
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafka-data:/bitnami/kafka
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    profiles: [queue, all]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "7233:7233"
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: app
+      POSTGRES_PWD: app_secret
+      POSTGRES_SEEDS: postgres
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    profiles: [queue, all]
+    restart: unless-stopped
+    depends_on: [temporal]
+    ports:
+      # 8088, not 8080: the API already owns 8080 via SERVER_PORT.
+      - "8088:8080"   # http://localhost:8088
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+
+volumes:
+  postgres-data:
+  redis-data:
+  mongo-data:
+  cassandra-data:
+  dynamodb-data:
+  elasticsearch-data:
+  kafka-data:

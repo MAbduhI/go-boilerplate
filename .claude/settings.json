@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go version *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(timeout 300 go get github.com/gin-gonic/gin@latest gorm.io/gorm@latest gorm.io/driver/postgres@latest github.com/google/uuid@latest github.com/golang-jwt/jwt/v5@latest golang.org/x/crypto@latest github.com/go-playground/validator/v10@latest)",
+      "Bash(go build *)",
+      "Bash(gofmt -l .)",
+      "Bash(go vet *)"
+    ]
+  }
+}
