@@ -50,15 +50,17 @@ immediately — add real fields to `modules/stock/model/stock.go` and go.
 
 ---
 
-## Repository layout
+## Project structure & repository layout
 
 ```
 go-boilerplate/
-├── go.work                      # defines the workspace; committed
-├── .forge.yaml                  # generator config: module prefix, base model
+├── go.work                      # defines the multi-module workspace; committed
+├── .forge.yaml                  # generator config: module prefix, base model, paths
 ├── .golangci.yml                # lint rules, applied to every module
 ├── docker-compose.yml           # local dev services (profiled)
 ├── Makefile                     # build/test/lint across all modules
+├── README.md                    # project overview & quick start
+├── HOW_TO_USE.md                # comprehensive developer guide & reference manual
 │
 ├── cmd/gen/                     # the code generator (its own module)
 │   ├── main.go                  # CLI, commands, flags
@@ -101,7 +103,7 @@ go-boilerplate/
 ```
 
 Full rationale for the layout, the dependency rules and the workspace mechanics:
-**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** and **[HOW_TO_USE.md](HOW_TO_USE.md)**.
 
 ### Why a module per feature
 
@@ -346,6 +348,7 @@ Three further defects surfaced while porting:
 
 ## Documentation
 
+- **[HOW_TO_USE.md](HOW_TO_USE.md)** — comprehensive developer guide, scaffolding walkthrough, connectors, transactions, and cheatsheet.
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — layer boundaries, workspace
   mechanics, why sibling modules carry no `require`, adding a connector, testing
   strategy.
