@@ -24,9 +24,16 @@ type DB interface {
 	// *gorm.DB, or the query will escape the caller's transaction.
 	Db(ctx context.Context) *gorm.DB
 
-	// WithTransaction runs fn inside a transaction, committing on nil error and
-	// rolling back otherwise.
+	// WithTransaction runs fn inside a transaction managed by the transaction pool,
+	// committing on nil error and rolling back otherwise.
 	WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error
+
+	// WithPooledTransaction runs fn inside a transaction managed by the transaction pool
+	// with custom options (e.g. isolation levels, read-only, per-tx timeouts, retries).
+	WithPooledTransaction(ctx context.Context, fn func(ctx context.Context) error, opts ...TxOption) error
+
+	// TxPool returns the underlying transaction pool for stats and metrics.
+	TxPool() *TxPool
 
 	// Ping verifies the connection is alive.
 	Ping(ctx context.Context) error
@@ -37,15 +44,16 @@ type DB interface {
 
 // Client is the GORM-backed DB implementation.
 type Client struct {
-	db  *gorm.DB
-	cfg Config
-	log *slog.Logger
+	db     *gorm.DB
+	cfg    Config
+	log    *slog.Logger
+	txPool *TxPool
 }
 
 // compile-time check that Client satisfies DB.
 var _ DB = (*Client)(nil)
 
-// New connects, applies the pool settings and verifies the connection.
+// New connects, applies the pool settings, initializes the transaction pool, and verifies the connection.
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	cfg.normalize()
 	log := logger.Module("postgres")
@@ -73,6 +81,14 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 
 	c := &Client{db: gormDB, cfg: cfg, log: log}
 
+	// Initialize transaction pool with configured bounds
+	c.txPool = NewTxPool(c, TxPoolConfig{
+		Capacity:       cfg.TxPoolSize,
+		AcquireTimeout: cfg.TxAcquireTimeout,
+		MaxRetries:     cfg.TxMaxRetries,
+		RetryBackoff:   cfg.TxRetryBackoff,
+	})
+
 	// gorm.Open is lazy, so a bad host or password surfaces only on first use.
 	// Ping here to turn a misconfiguration into a boot failure.
 	if err := c.Ping(ctx); err != nil {
@@ -85,6 +101,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		slog.String("database", cfg.DBName),
 		slog.Int("max_open_conns", cfg.MaxOpenConns),
 		slog.Int("max_idle_conns", cfg.MaxIdleConns),
+		slog.Int("tx_pool_size", cfg.TxPoolSize),
 		slog.Duration("conn_max_lifetime", cfg.ConnMaxLifetime),
 		slog.Duration("conn_max_idle_time", cfg.ConnMaxIdleTime))
 
@@ -95,7 +112,14 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 // their own dialector.
 func NewWithGorm(db *gorm.DB, cfg Config) *Client {
 	cfg.normalize()
-	return &Client{db: db, cfg: cfg, log: logger.Module("postgres")}
+	c := &Client{db: db, cfg: cfg, log: logger.Module("postgres")}
+	c.txPool = NewTxPool(c, TxPoolConfig{
+		Capacity:       cfg.TxPoolSize,
+		AcquireTimeout: cfg.TxAcquireTimeout,
+		MaxRetries:     cfg.TxMaxRetries,
+		RetryBackoff:   cfg.TxRetryBackoff,
+	})
+	return c
 }
 
 // Gorm returns the root handle, bypassing any ambient transaction. Reserve it
@@ -104,6 +128,9 @@ func (c *Client) Gorm() *gorm.DB { return c.db }
 
 // Config reports the resolved configuration.
 func (c *Client) Config() Config { return c.cfg }
+
+// TxPool returns the active transaction pool.
+func (c *Client) TxPool() *TxPool { return c.txPool }
 
 // Db returns the ambient transaction when present, otherwise the pool bound to
 // ctx so query cancellation follows the request.
@@ -118,17 +145,41 @@ func (c *Client) Db(ctx context.Context) *gorm.DB { //nolint:staticcheck // ST10
 	return c.db.WithContext(ctx)
 }
 
-// WithTransaction runs fn in a transaction and passes it a ctx carrying that
-// transaction, so any repository reached through Db(ctx) joins it.
+// WithTransaction runs fn in a transaction governed by the transaction pool.
 //
 // When ctx is already inside a transaction, fn runs in a nested savepoint
-// instead of opening a second one: that keeps a usecase composable — it can be
+// without acquiring a new pool permit. That keeps a usecase composable — it can be
 // called standalone or from within a larger transaction — and a failure rolls
 // back only fn's own work rather than the entire outer transaction.
 //
 // Rollback on panic is handled by GORM's Transaction, which rolls back and
 // re-panics so the stack is preserved.
 func (c *Client) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	if c.txPool != nil {
+		return c.txPool.Execute(ctx, fn)
+	}
+	if tx, ok := TxFromContext(ctx); ok {
+		return tx.Transaction(func(nested *gorm.DB) error {
+			return fn(contextWithTx(ctx, nested))
+		})
+	}
+	return c.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return fn(contextWithTx(ctx, tx))
+	})
+}
+
+// WithPooledTransaction executes fn inside a transaction managed by TxPool
+// with custom options (isolation levels, timeouts, retries).
+func (c *Client) WithPooledTransaction(ctx context.Context, fn func(ctx context.Context) error, opts ...TxOption) error {
+	if c.txPool != nil {
+		return c.txPool.Execute(ctx, fn, opts...)
+	}
+	return c.WithTransaction(ctx, fn)
+}
+
+// WithDirectTransaction runs fn in a transaction directly against the connection pool,
+// bypassing the transaction pool's concurrency limiter.
+func (c *Client) WithDirectTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
 	if tx, ok := TxFromContext(ctx); ok {
 		return tx.Transaction(func(nested *gorm.DB) error {
 			return fn(contextWithTx(ctx, nested))
@@ -168,6 +219,9 @@ func (c *Client) Stats() (open, inUse, idle int, waitCount int64) {
 
 // Close drains the pool. It is registered with the shutdown registry.
 func (c *Client) Close() error {
+	if c.txPool != nil {
+		_ = c.txPool.Close()
+	}
 	sqlDB, err := c.db.DB()
 	if err != nil {
 		return fmt.Errorf("postgres: underlying sql.DB: %w", err)

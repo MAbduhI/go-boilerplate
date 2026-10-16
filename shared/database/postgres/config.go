@@ -1,5 +1,5 @@
 // Package postgres wraps GORM with pooling, a correct transaction-in-context
-// helper, and a shutdown-friendly Close.
+// helper, transaction pool concurrency limits, and a shutdown-friendly Close.
 package postgres
 
 import (
@@ -11,7 +11,7 @@ import (
 	"github.com/MAbduhI/go-boilerplate/shared/config"
 )
 
-// Config describes the connection and the pool.
+// Config describes the connection, connection pool, and transaction pool limits.
 //
 // Every duration is a time.Duration rather than a bare "minutes" int, so the
 // unit is carried by the value; the reference project's ConnMaxLifetimeMin had
@@ -30,6 +30,12 @@ type Config struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+
+	// Transaction Pool (TxPool) limits.
+	TxPoolSize       int           // Max concurrent active transactions (defaults to 80% of MaxOpenConns)
+	TxAcquireTimeout time.Duration // Max time to wait for a transaction slot before failing (default: 5s)
+	TxMaxRetries     int           // Max retry attempts on transient serialization/deadlock errors (default: 3)
+	TxRetryBackoff   time.Duration // Base backoff for transient error retries (default: 50ms)
 
 	// ConnectTimeout bounds the initial handshake.
 	ConnectTimeout time.Duration
@@ -63,6 +69,11 @@ func LoadConfig() Config {
 		ConnMaxLifetime: config.Duration("POSTGRES_CONN_MAX_LIFETIME", 15*time.Minute),
 		ConnMaxIdleTime: config.Duration("POSTGRES_CONN_MAX_IDLE_TIME", 5*time.Minute),
 		ConnectTimeout:  config.Duration("POSTGRES_CONNECT_TIMEOUT", 10*time.Second),
+
+		TxPoolSize:       config.Int("POSTGRES_TX_POOL_SIZE", 0),
+		TxAcquireTimeout: config.Duration("POSTGRES_TX_ACQUIRE_TIMEOUT", 5*time.Second),
+		TxMaxRetries:     config.Int("POSTGRES_TX_MAX_RETRIES", 3),
+		TxRetryBackoff:   config.Duration("POSTGRES_TX_RETRY_BACKOFF", 50*time.Millisecond),
 
 		LogLevel:      config.String("POSTGRES_LOG_LEVEL", "warn"),
 		SlowThreshold: config.Duration("POSTGRES_SLOW_THRESHOLD", 500*time.Millisecond),
@@ -128,5 +139,22 @@ func (c *Config) normalize() {
 	}
 	if c.TimeZone == "" {
 		c.TimeZone = "UTC"
+	}
+
+	// Transaction pool defaults
+	if c.TxPoolSize <= 0 {
+		c.TxPoolSize = int(float64(c.MaxOpenConns) * 0.8)
+		if c.TxPoolSize < 1 {
+			c.TxPoolSize = 1
+		}
+	}
+	if c.TxAcquireTimeout <= 0 {
+		c.TxAcquireTimeout = 5 * time.Second
+	}
+	if c.TxMaxRetries < 0 {
+		c.TxMaxRetries = 0
+	}
+	if c.TxRetryBackoff <= 0 {
+		c.TxRetryBackoff = 50 * time.Millisecond
 	}
 }

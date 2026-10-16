@@ -3,6 +3,7 @@ package security
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -29,9 +30,38 @@ var (
 // per-login identifier that lets a single session be revoked without
 // invalidating every token the user holds.
 type Claims struct {
-	Session string    `json:"sid,omitempty"`
-	Type    TokenType `json:"typ"`
+	Session     string    `json:"sid,omitempty"`
+	TenantID    string    `json:"tid,omitempty"`
+	Roles       []string  `json:"roles,omitempty"`
+	Permissions []string  `json:"perms,omitempty"`
+	Type        TokenType `json:"typ"`
 	jwt.RegisteredClaims
+}
+
+// HasRole checks if the claims contain a given role or superadmin.
+func (c *Claims) HasRole(role string) bool {
+	for _, r := range c.Roles {
+		if r == role || r == "superadmin" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasPermission checks if the claims contain an exact permission or a wildcard.
+func (c *Claims) HasPermission(perm string) bool {
+	for _, p := range c.Permissions {
+		if p == perm || p == "*" {
+			return true
+		}
+		if strings.HasSuffix(p, ":*") {
+			prefix := strings.TrimSuffix(p, ":*")
+			if strings.HasPrefix(perm, prefix+":") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TokenConfig configures the signing key, issuer and lifetimes.
@@ -99,17 +129,27 @@ type Pair struct {
 
 // GenerateAccess issues an access token for subject within session.
 func (m *TokenManager) GenerateAccess(subject, session string) (string, time.Time, error) {
-	return m.generate(subject, session, TokenAccess, m.cfg.AccessTTL)
+	return m.generate(subject, session, "", nil, nil, TokenAccess, m.cfg.AccessTTL)
+}
+
+// GenerateAccessWithClaims issues an access token with tenant, roles, and permissions.
+func (m *TokenManager) GenerateAccessWithClaims(subject, session, tenantID string, roles, perms []string) (string, time.Time, error) {
+	return m.generate(subject, session, tenantID, roles, perms, TokenAccess, m.cfg.AccessTTL)
 }
 
 // GenerateRefresh issues a refresh token for subject within session.
 func (m *TokenManager) GenerateRefresh(subject, session string) (string, time.Time, error) {
-	return m.generate(subject, session, TokenRefresh, m.cfg.RefreshTTL)
+	return m.generate(subject, session, "", nil, nil, TokenRefresh, m.cfg.RefreshTTL)
 }
 
 // GeneratePair issues both tokens for one login.
 func (m *TokenManager) GeneratePair(subject, session string) (Pair, error) {
-	access, accessExp, err := m.GenerateAccess(subject, session)
+	return m.GeneratePairWithClaims(subject, session, "", nil, nil)
+}
+
+// GeneratePairWithClaims issues both tokens including tenant, roles, and permissions.
+func (m *TokenManager) GeneratePairWithClaims(subject, session, tenantID string, roles, perms []string) (Pair, error) {
+	access, accessExp, err := m.GenerateAccessWithClaims(subject, session, tenantID, roles, perms)
 	if err != nil {
 		return Pair{}, err
 	}
@@ -126,7 +166,7 @@ func (m *TokenManager) GeneratePair(subject, session string) (Pair, error) {
 	}, nil
 }
 
-func (m *TokenManager) generate(subject, session string, typ TokenType, ttl time.Duration) (string, time.Time, error) {
+func (m *TokenManager) generate(subject, session, tenantID string, roles, perms []string, typ TokenType, ttl time.Duration) (string, time.Time, error) {
 	if subject == "" {
 		return "", time.Time{}, errors.New("security: token subject must not be empty")
 	}
@@ -134,8 +174,11 @@ func (m *TokenManager) generate(subject, session string, typ TokenType, ttl time
 	exp := now.Add(ttl)
 
 	claims := Claims{
-		Session: session,
-		Type:    typ,
+		Session:     session,
+		TenantID:    tenantID,
+		Roles:       roles,
+		Permissions: perms,
+		Type:        typ,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   subject,
 			Issuer:    m.cfg.Issuer,

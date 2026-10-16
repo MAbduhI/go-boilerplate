@@ -1,6 +1,6 @@
 module github.com/MAbduhI/go-boilerplate/shared
 
-go 1.26.5
+go 1.25.4
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -14,6 +14,7 @@ require (
 	github.com/gocql/gocql v1.7.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/segmentio/kafka-go v0.4.51
 	go.mongodb.org/mongo-driver v1.17.9
